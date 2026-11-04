@@ -49,6 +49,13 @@ Données partagées dans le navigateur (`assets/js/store.js`). Site et back-offi
 - CGV : mot manquant corrigé (« abonnements mensuels **avec engagement** sont conclus »), dates incohérentes (06/08/2026 et 11/12/2025).
 - Mentions légales : nouvel hébergeur. Confidentialité : section cookies réécrite (plus d'analytics Liberfit).
 
+## Expérience et thème
+
+- Animations au scroll (GSAP 3.13 + ScrollTrigger + SplitText, chargés depuis cdnjs) : `assets/js/anim.js`.
+  Héros qui s'éloigne, arche qui s'ouvre sur la salle (section fixée, ordinateur seulement), titres révélés ligne par ligne, bienfaits qui s'éclairent, jauges qui se remplissent, photos en profondeur, coachs en vague, fond de la retraite.
+- Mobile : effets allégés, aucune section fixée. « Réduire les animations » : tout est coupé, contenu complet.
+- Mode sombre sur le site et le back-office : suit l'appareil, bouton pour changer, choix mémorisé et partagé entre site et admin.
+
 ## Identité
 
 - Logo d'origine conservé, extrait en versions taupe et blanche (`assets/img/logo-*.png`, `monogramme-*.png`).

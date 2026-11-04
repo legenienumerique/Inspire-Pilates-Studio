@@ -10,6 +10,25 @@
   const jourLong = (d) => new Date(d).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
   const params = new URLSearchParams(location.search);
 
+  /* ---------- thème clair / sombre (partagé avec le back-office) ---------- */
+  const racine = document.documentElement;
+  function majTheme() {
+    const sombre = racine.dataset.theme === 'dark';
+    $$('[data-theme-bouton]').forEach((b) => {
+      b.setAttribute('aria-label', sombre ? 'Activer le mode clair' : 'Activer le mode sombre');
+      b.setAttribute('aria-pressed', sombre);
+    });
+    const meta = $('meta[name="theme-color"]');
+    if (meta) meta.content = sombre ? '#1b1815' : '#ece7e1';
+  }
+  $$('[data-theme-bouton]').forEach((b) => b.addEventListener('click', () => {
+    racine.dataset.theme = racine.dataset.theme === 'dark' ? 'light' : 'dark';
+    try { localStorage.setItem('ips-theme', racine.dataset.theme); } catch (e) {}
+    majTheme();
+  }));
+  addEventListener('storage', (e) => { if (e.key === 'ips-theme' && e.newValue) { racine.dataset.theme = e.newValue; majTheme(); } });
+  majTheme();
+
   /* ---------- en-tête ---------- */
   const burger = $('.burger');
   const nav = $('#nav');

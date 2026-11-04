@@ -18,6 +18,22 @@
     clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('visible'), 3200);
   }
 
+  /* ---------- thème clair / sombre (partagé avec le site) ---------- */
+  const racine = document.documentElement;
+  const boutonTheme = $('[data-theme-bouton]');
+  function majTheme() {
+    const sombre = racine.dataset.theme === 'dark';
+    boutonTheme.textContent = sombre ? 'Mode clair' : 'Mode sombre';
+    boutonTheme.setAttribute('aria-pressed', sombre);
+  }
+  boutonTheme.addEventListener('click', () => {
+    racine.dataset.theme = racine.dataset.theme === 'dark' ? 'light' : 'dark';
+    try { localStorage.setItem('ips-theme', racine.dataset.theme); } catch (e) {}
+    majTheme();
+  });
+  addEventListener('storage', (e) => { if (e.key === 'ips-theme' && e.newValue) { racine.dataset.theme = e.newValue; majTheme(); } });
+  majTheme();
+
   /* ---------- accès ---------- */
   function connecte() { try { return sessionStorage.getItem(AUTH) === '1'; } catch (e) { return false; } }
   function afficherAcces() {
