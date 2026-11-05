@@ -22,7 +22,7 @@ Données partagées dans le navigateur (`assets/js/store.js`). Site et back-offi
 - Réservation : création de compte, séance découverte réservée aux nouveaux clients, décompte sur forfait, liste d'attente avec inscription automatique.
 - Règles des CGV : réservation 30 jours avant, fermeture 15 min avant, annulation gratuite jusqu'à 12 h, séance décomptée au-delà.
 - Espace client : séances à venir, historique et présences, crédits, paiements, export et suppression des données (RGPD).
-- Back-office : tableau de bord, planning semaine (créer, modifier, annuler, copier la semaine), participants et pointage, clients (fiche, formules, crédits, ventes, historique), paiements (encaissement, export CSV), tarifs, coachs, e-mails générés, réglages (règles, horaires, annonce).
+- Back-office : tableau de bord, planning semaine (créer, modifier, annuler, copier la semaine), participants et pointage, clients (page client : formules, crédits, ventes, historique par année et mois, e-mails envoyés), paiements (encaissement, export CSV), tarifs, coachs (photo envoyée depuis l’ordinateur ou le téléphone), réglages (règles, horaires, annonce).
 - Automatismes : renouvellement mensuel des abonnements, expiration des packs, e-mails de confirmation, annulation, place libérée, changement d'horaire.
 
 ## Ce qui est simulé (à construire en production)

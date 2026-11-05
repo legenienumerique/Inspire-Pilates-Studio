@@ -151,8 +151,10 @@
     renewSubscriptions();
     return db;
   }
+  let saveOk = true;
   function persist() {
-    try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { /* navigation privée : données en mémoire */ }
+    // Échec possible : navigation privée ou stockage plein (photos). Les données restent en mémoire.
+    try { localStorage.setItem(KEY, JSON.stringify(db)); saveOk = true; } catch (e) { saveOk = false; }
   }
   // Réparation : séances, clients ou coachs enregistrés sans identifiant par l'ancienne version.
   function repairIds() {
@@ -335,9 +337,32 @@
     return out;
   }
 
+  // Regroupe des éléments par année puis par mois, du plus récent au plus ancien.
+  function parPeriode(items, dateOf) {
+    const annees = [];
+    items.slice().sort((a, b) => new Date(dateOf(b)) - new Date(dateOf(a))).forEach((it) => {
+      const d = new Date(dateOf(it));
+      const y = d.getFullYear(); const m = d.getMonth();
+      let a = annees[annees.length - 1];
+      if (!a || a.annee !== y) { a = { annee: y, items: [], mois: [] }; annees.push(a); }
+      let mo = a.mois[a.mois.length - 1];
+      if (!mo || mo.mois !== m) {
+        const label = new Date(y, m, 1).toLocaleDateString('fr-FR', { month: 'long' });
+        mo = { mois: m, cle: y + '-' + String(m + 1).padStart(2, '0'), label: label[0].toUpperCase() + label.slice(1), items: [] };
+        a.mois.push(mo);
+      }
+      a.items.push(it); mo.items.push(it);
+    });
+    return annees;
+  }
+
   /* ---------- API publique ---------- */
   const api = {
     get db() { return db || load(); },
+    get saveOk() { return saveOk; },
+    parPeriode,
+    photoSrc: (photo, base) => !photo ? '' : /^(data:image\/|https?:)/.test(photo) ? photo : (base || '') + 'assets/img/' + photo,
+    notificationsOf: (clientId) => db.notifications.filter((n) => n.clientId === clientId),
     load, uid, DAY, startOfDay,
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     reset() { db = seed(); persist(); renewSubscriptions(); try { localStorage.removeItem(ME_KEY); } catch (e) {} listeners.forEach((fn) => fn(db)); },

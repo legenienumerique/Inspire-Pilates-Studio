@@ -50,15 +50,18 @@
   $('[data-logout]').addEventListener('click', () => { try { sessionStorage.removeItem(AUTH); } catch (e) {} afficherAcces(); });
 
   /* ---------- routeur ---------- */
-  const VUES = { accueil, planning, clients, paiements, tarifs, coachs, notifications, reglages };
+  const VUES = { accueil, planning, clients, client: () => pageClient(routeArg), paiements, tarifs, coachs, reglages };
   let vueCourante = 'accueil';
+  let routeArg = '';
   function route() {
-    vueCourante = (location.hash || '#accueil').slice(1);
-    if (!VUES[vueCourante]) vueCourante = 'accueil';
-    $$('[data-vue]').forEach((a) => { if (a.dataset.vue === vueCourante) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
+    const [v, arg] = (location.hash || '#accueil').slice(1).split('/');
+    vueCourante = VUES[v] ? v : 'accueil';
+    routeArg = decodeURIComponent(arg || '');
+    const menu = vueCourante === 'client' ? 'clients' : vueCourante;
+    $$('[data-vue]').forEach((a) => { if (a.dataset.vue === menu) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
     VUES[vueCourante]();
   }
-  addEventListener('hashchange', () => { route(); vue.focus(); });
+  addEventListener('hashchange', () => { if (!$('[data-tiroir]').hidden) fermerTiroir(); route(); scrollTo(0, 0); vue.focus({ preventScroll: true }); });
   S.subscribe(() => { if (connecte()) { VUES[vueCourante](); if (tiroirRefresh) tiroirRefresh(); } });
 
   /* ---------- tiroir ---------- */
@@ -317,89 +320,177 @@
     a.download = nomFichier; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
 
-  function ficheClient(id) {
-    tiroir((root) => {
-      const c = id && S.client(id);
-      const now = new Date();
-      const seances = c ? S.bookingsOf(c.id) : [];
-      const futur = seances.filter((s) => new Date(s.start) > now && !s.cancelled);
-      const passe = seances.filter((s) => new Date(s.start) <= now && s.bookings.some((b) => b.clientId === c.id)).reverse();
-      const presents = passe.filter((s) => s.attendance[c.id] === 'present').length;
-      const absents = passe.filter((s) => s.attendance[c.id] === 'absent').length;
-      const forfaits = c ? S.memberships(c.id).sort((a, b) => new Date(b.start) - new Date(a.start)) : [];
-      const pay = c ? S.db.payments.filter((p) => p.clientId === c.id).sort((a, b) => new Date(b.date) - new Date(a.date)) : [];
-      root.innerHTML = `<h2 id="tiroir-titre">${c ? esc(nom(c)) : 'Nouveau client'}</h2>
-        <p class="doux">${c ? 'Client depuis le ' + dateC(c.createdAt) + (passe.length ? `, ${presents} présence${presents > 1 ? 's' : ''}, ${absents} absence${absents > 1 ? 's' : ''}` : '') : 'Le client pourra ensuite réserver depuis le site avec son e-mail.'}</p>
-        <form data-f="client" class="bloc-tiroir">
-          <div class="ligne"><div class="champ"><label for="k-prenom">Prénom</label><input id="k-prenom" value="${esc(c ? c.firstName : '')}" required></div>
-          <div class="champ"><label for="k-nom">Nom</label><input id="k-nom" value="${esc(c ? c.lastName : '')}" required></div></div>
-          <div class="ligne"><div class="champ"><label for="k-email">E-mail</label><input id="k-email" type="email" value="${esc(c ? c.email : '')}" required></div>
-          <div class="champ"><label for="k-tel">Téléphone</label><input id="k-tel" type="tel" value="${esc(c ? c.phone : '')}"></div></div>
-          <div class="champ"><label for="k-notes">Notes (santé signalée, préférences…)</label><textarea id="k-notes">${esc(c ? c.notes : '')}</textarea></div>
-          <label class="case"><input type="checkbox" id="k-mkt" ${c && c.marketing ? 'checked' : ''}> Accepte de recevoir les offres et évènements</label>
-          <p class="erreur" data-err></p>
-          <button class="btn" type="submit">${c ? 'Enregistrer' : 'Créer la fiche'}</button>
-        </form>
-        ${c ? `<div class="bloc-tiroir"><h3>Formules</h3>
-          ${forfaits.length ? forfaits.map((m) => `<div class="forfait"><span>${m.status === 'actif' ? `<b>${m.creditsLeft}</b>` : ''}${esc(m.name)}<br>
+  // La fiche client est une page à part entière : #client/<id> ou #client/nouveau.
+  function ficheClient(id) { location.hash = '#client/' + (id || 'nouveau'); }
+
+  /* Sections et périodes repliables : l'état ouvert / fermé est gardé pendant la visite. */
+  const etatPlis = new Map();
+  const ouvert = (cle, defaut) => (etatPlis.has(cle) ? etatPlis.get(cle) : defaut);
+  function periodes(prefixe, groupes, ligne, resume) {
+    const contenus = {};
+    const html = groupes.map((a, ia) => {
+      const ca = prefixe + ':' + a.annee;
+      return `<details class="periode periode--annee" data-pli="${ca}" ${ouvert(ca, ia === 0) ? 'open' : ''}>
+        <summary><span class="periode__titre">${a.annee}</span><small>${resume(a.items)}</small></summary>
+        ${a.mois.map((m, im) => {
+          const cm = prefixe + ':' + m.cle;
+          const om = ouvert(cm, ia === 0 && im === 0);
+          contenus[cm] = () => `<ul class="liste">${m.items.map(ligne).join('')}</ul>`;
+          return `<details class="periode periode--mois" data-pli="${cm}" ${om ? 'open' : ''}>
+            <summary><span class="periode__titre">${m.label}</span><small>${resume(m.items)}</small></summary>
+            <div data-contenu>${om ? contenus[cm]() : ''}</div></details>`;
+        }).join('')}</details>`;
+    }).join('');
+    return { html: html ? `<div class="periodes">${html}</div>` : '', contenus };
+  }
+  function activerPlis(root, contenus) {
+    $$('details[data-pli]', root).forEach((d) => d.addEventListener('toggle', () => {
+      etatPlis.set(d.dataset.pli, d.open);
+      const c = d.querySelector(':scope > [data-contenu]');
+      if (d.open && c && !c.firstChild && contenus[d.dataset.pli]) c.innerHTML = contenus[d.dataset.pli]();
+    }));
+  }
+  const pluriel = (n, mot) => n + ' ' + mot + (n > 1 ? 's' : '');
+  function section(cle, titre, resume, corps, defaut) {
+    return `<details class="section-client" id="sec-${cle}" data-pli="sec:${cle}" ${ouvert('sec:' + cle, defaut) ? 'open' : ''}>
+      <summary><h2>${titre}</h2>${resume ? `<small>${resume}</small>` : ''}</summary><div class="section-client__corps">${corps}</div></details>`;
+  }
+
+  function pageClient(id) {
+    const c = id && id !== 'nouveau' ? S.client(id) : null;
+    if (id && id !== 'nouveau' && (!c || c.erased)) {
+      vue.innerHTML = `<a class="retour" href="#clients">← Tous les clients</a><p class="vide">Ce client n’existe plus.</p>`;
+      return;
+    }
+    const now = new Date();
+    const formulaire = `<form data-f="client">
+        <div class="ligne"><div class="champ"><label for="k-prenom">Prénom</label><input id="k-prenom" value="${esc(c ? c.firstName : '')}" required></div>
+        <div class="champ"><label for="k-nom">Nom</label><input id="k-nom" value="${esc(c ? c.lastName : '')}" required></div></div>
+        <div class="ligne"><div class="champ"><label for="k-email">E-mail</label><input id="k-email" type="email" value="${esc(c ? c.email : '')}" required></div>
+        <div class="champ"><label for="k-tel">Téléphone</label><input id="k-tel" type="tel" value="${esc(c ? c.phone : '')}"></div></div>
+        <div class="champ"><label for="k-notes">Notes (santé signalée, préférences…)</label><textarea id="k-notes">${esc(c ? c.notes : '')}</textarea></div>
+        <label class="case"><input type="checkbox" id="k-mkt" ${c && c.marketing ? 'checked' : ''}> Accepte de recevoir les offres et évènements</label>
+        <p class="erreur" data-err></p>
+        <button class="btn" type="submit">${c ? 'Enregistrer' : 'Créer la fiche'}</button>
+      </form>`;
+
+    if (!c) {
+      vue.innerHTML = `<a class="retour" href="#clients">← Tous les clients</a>
+        <div class="tete"><div><h1>Nouveau client</h1><p>Le client pourra ensuite réserver depuis le site avec son e-mail.</p></div></div>
+        <section class="panneau" style="max-width:44rem">${formulaire}</section>`;
+      lierFormulaireClient(null);
+      return;
+    }
+
+    const seances = S.bookingsOf(c.id);
+    const futur = seances.filter((s) => new Date(s.start) > now && !s.cancelled);
+    const passe = seances.filter((s) => new Date(s.start) <= now && s.bookings.some((b) => b.clientId === c.id));
+    const presents = passe.filter((s) => s.attendance[c.id] === 'present').length;
+    const absents = passe.filter((s) => s.attendance[c.id] === 'absent').length;
+    const forfaits = S.memberships(c.id).sort((a, b) => new Date(b.start) - new Date(a.start));
+    const actifs = S.activeMemberships(c.id);
+    const pay = S.db.payments.filter((p) => p.clientId === c.id).sort((a, b) => new Date(b.date) - new Date(a.date));
+    const aRegler = pay.filter((p) => p.status === 'à régler');
+    const mails = S.notificationsOf(c.id);
+
+    const histo = periodes('histo-' + c.id, S.parPeriode(passe, (s) => s.start), (s) => {
+      const v = s.attendance[c.id];
+      return `<li><span><span class="horaire">${dateC(s.start)}, ${hhmm(s.start)}</span><br><small class="doux">${esc(S.activity(s.activityId).name)}, ${esc((S.coach(s.coachId) || {}).name || '')}</small></span>
+        <span class="pastille ${v === 'present' ? 'pastille--ok' : v === 'absent' ? 'pastille--non' : ''}">${v === 'present' ? 'Présent' : v === 'absent' ? 'Absent' : 'Non pointé'}</span></li>`;
+    }, (list) => {
+      const p = list.filter((s) => s.attendance[c.id] === 'present').length;
+      const a = list.filter((s) => s.attendance[c.id] === 'absent').length;
+      return pluriel(list.length, 'séance') + (p ? ', ' + pluriel(p, 'présence') : '') + (a ? ', ' + pluriel(a, 'absence') : '');
+    });
+    const echanges = periodes('mails-' + c.id, S.parPeriode(mails, (n) => n.at), (n) => `<li class="mail-ligne"><details class="mail">
+        <summary><span>${esc(n.subject)}</span><small class="doux horaire">${dateC(n.at)}, ${hhmm(n.at)}</small></summary>
+        <small class="doux">À : ${esc(n.to)}, par ${esc(n.channel || 'e-mail')}</small><p>${esc(n.body)}</p></details></li>`,
+      (list) => pluriel(list.length, 'e-mail'));
+    const contenus = Object.assign({}, histo.contenus, echanges.contenus);
+
+    const credits = actifs.reduce((a, m) => a + m.creditsLeft, 0);
+    vue.innerHTML = `<a class="retour" href="#clients">← Tous les clients</a>
+      <div class="tete"><div><h1>${esc(nom(c))}</h1>
+        <p>Client depuis le ${dateC(c.createdAt)}${actifs.length ? ', ' + actifs.map((m) => esc(m.name)).join(', ') : ', aucune formule active'}</p></div>
+        <div class="outils"><a class="btn btn--clair" href="mailto:${esc(c.email)}">Écrire</a>${c.phone ? `<a class="btn btn--clair" href="tel:${esc(c.phone.replace(/\s/g, ''))}">Appeler</a>` : ''}</div></div>
+      <div class="chiffres">
+        <div class="chiffre"><b>${credits}</b><span>séance${credits > 1 ? 's' : ''} restante${credits > 1 ? 's' : ''}</span></div>
+        <div class="chiffre"><b>${futur.length}</b><span>à venir</span></div>
+        <div class="chiffre"><b>${presents}</b><span>présence${presents > 1 ? 's' : ''}${absents ? `, ${pluriel(absents, 'absence')}` : ''}</span></div>
+        <div class="chiffre ${aRegler.length ? 'chiffre--alerte' : ''}"><b>${euro(aRegler.reduce((a, p) => a + p.amount, 0))}</b><span>à régler</span></div>
+      </div>
+      <nav class="ancres" aria-label="Sections de la fiche">
+        ${[['coord', 'Coordonnées'], ['formules', 'Formules'], ['avenir', 'À venir'], ['historique', 'Historique'], ['paiements', 'Paiements'], ['mails', 'E-mails'], ['rgpd', 'Données']]
+          .map(([k, t]) => `<button type="button" data-ancre="${k}">${t}</button>`).join('')}
+      </nav>
+      <div class="page-client">
+        <div class="page-client__col">
+          ${section('avenir', 'Séances à venir', pluriel(futur.length, 'séance'), futur.length ? `<ul class="liste">${futur.map((s) => {
+            const w = s.waitlist.findIndex((x) => x.clientId === c.id);
+            return `<li><span><span class="horaire">${jour(s.start)}, ${hhmm(s.start)}</span><br><small class="doux">${esc(S.activity(s.activityId).name)}, ${esc((S.coach(s.coachId) || {}).name || '')}</small></span>
+              <span class="outils">${w > -1 ? `<span class="pastille">Attente n°${w + 1}</span>` : '<span class="pastille pastille--ok">Inscrit</span>'}<button class="btn btn--clair btn--mini" type="button" data-seance="${s.id}">Ouvrir</button></span></li>`;
+          }).join('')}</ul>` : '<p class="doux">Aucune réservation à venir.</p>', true)}
+          ${section('historique', 'Historique des séances', `${pluriel(passe.length, 'séance')}, ${pluriel(presents, 'présence')}`, histo.html || '<p class="doux">Aucune séance passée.</p>', true)}
+          ${section('mails', 'E-mails envoyés', pluriel(mails.length, 'e-mail'), (echanges.html || '<p class="doux">Aucun e-mail envoyé à ce client.</p>') +
+            '<p class="petit doux">Démo : les e-mails sont enregistrés sans être envoyés. En production, ils partent via un service d’envoi (Brevo ou SMTP de l’hébergeur).</p>', true)}
+        </div>
+        <div class="page-client__col">
+          ${section('coord', 'Coordonnées', esc(c.email), formulaire, true)}
+          ${section('formules', 'Formules', pluriel(actifs.length, 'active'), `${forfaits.length ? forfaits.map((m) => `<div class="forfait"><span>${m.status === 'actif' ? `<b>${m.creditsLeft}</b>` : ''}${esc(m.name)}<br>
             <small class="doux">Depuis le ${dateC(m.start)}, ${m.kind === 'abo' ? (m.status === 'actif' ? 'prochain renouvellement le ' + dateC(m.cycleEnd) : m.status) + (m.engagementEnd ? ', engagement jusqu’au ' + dateC(m.engagementEnd) : '') : 'valable jusqu’au ' + dateC(m.end)}</small></span>
             <span class="outils">${m.status === 'actif' ? `<button class="btn btn--clair btn--mini" type="button" data-credit="${m.id}" data-d="-1" aria-label="Retirer un crédit">−1</button><button class="btn btn--clair btn--mini" type="button" data-credit="${m.id}" data-d="1" aria-label="Ajouter un crédit">+1</button>
             ${m.kind === 'abo' ? `<button class="btn btn--danger btn--mini" type="button" data-resilier="${m.id}">Résilier</button>` : ''}` : `<span class="pastille">${esc(m.status)}</span>`}</span></div>`).join('') : '<p class="doux">Aucune formule.</p>'}
-          <div class="actions"><select class="mini" data-vente-offre aria-label="Formule à vendre">${S.db.offers.filter((o) => o.active).map((o) => `<option value="${o.id}">${esc(o.name)} (${euro(o.price)})</option>`).join('')}</select>
-            <select class="mini" data-vente-moyen aria-label="Moyen de paiement"><option>CB</option><option>Sans contact</option><option>SEPA</option><option>Espèces</option><option>Chèque</option></select>
-            <label class="case" style="margin:0"><input type="checkbox" data-vente-paye checked> Payé</label>
-            <button class="btn btn--mini" type="button" data-vendre>Vendre</button></div>
+            <div class="actions"><select class="mini" data-vente-offre aria-label="Formule à vendre">${S.db.offers.filter((o) => o.active).map((o) => `<option value="${o.id}">${esc(o.name)} (${euro(o.price)})</option>`).join('')}</select>
+              <select class="mini" data-vente-moyen aria-label="Moyen de paiement"><option>CB</option><option>Sans contact</option><option>SEPA</option><option>Espèces</option><option>Chèque</option></select>
+              <label class="case" style="margin:0"><input type="checkbox" data-vente-paye checked> Payé</label>
+              <button class="btn btn--mini" type="button" data-vendre>Vendre</button></div>`, true)}
+          ${section('paiements', 'Paiements', pluriel(pay.length, 'paiement') + (aRegler.length ? `, ${aRegler.length} à régler` : ''), pay.length ? `<ul class="liste">${pay.map((p) => `<li><span>${esc(p.label)}<br><small class="doux">${dateC(p.date)}, ${esc(p.method)}</small></span>
+            <span class="outils"><span class="montant">${euro(p.amount)}</span> <span class="pastille ${p.status === 'payé' ? 'pastille--ok' : p.status === 'à régler' ? 'pastille--non' : ''}">${esc(p.status)}</span>
+            ${p.status === 'à régler' ? `<button class="btn btn--mini" type="button" data-encaisser="${p.id}">Encaisser</button>` : ''}</span></li>`).join('')}</ul>` : '<p class="doux">Aucun paiement.</p>', aRegler.length > 0)}
+          ${section('rgpd', 'Données personnelles (RGPD)', '', `<div class="actions"><button class="btn btn--clair btn--mini" type="button" data-export>Exporter ses données</button>
+            <button class="btn btn--danger btn--mini" type="button" data-effacer>Effacer ses données</button></div>
+            <p class="petit doux">L’effacement anonymise la fiche et annule les réservations à venir. Les paiements restent conservés pour la comptabilité.</p>`, false)}
         </div>
-        <div class="bloc-tiroir"><h3>Séances à venir (${futur.length})</h3>
-          ${futur.length ? `<ul class="liste">${futur.map((s) => { const w = s.waitlist.findIndex((x) => x.clientId === c.id);
-            return `<li><span>${jour(s.start)}, ${hhmm(s.start)}<br><small class="doux">${esc(S.activity(s.activityId).name)}</small></span>
-            <span class="outils">${w > -1 ? `<span class="pastille">Attente n°${w + 1}</span>` : '<span class="pastille pastille--ok">Inscrit</span>'}<button class="btn btn--clair btn--mini" type="button" data-seance="${s.id}">Ouvrir</button></span></li>`; }).join('')}</ul>` : '<p class="doux">Aucune réservation à venir.</p>'}
-        </div>
-        <div class="bloc-tiroir"><h3>Historique de fréquentation</h3>
-          ${passe.length ? `<ul class="liste">${passe.slice(0, 20).map((s) => { const v = s.attendance[c.id];
-            return `<li><span>${dateC(s.start)}, ${hhmm(s.start)}<br><small class="doux">${esc(S.activity(s.activityId).name)}, ${esc((S.coach(s.coachId) || {}).name || '')}</small></span>
-            <span class="pastille ${v === 'present' ? 'pastille--ok' : v === 'absent' ? 'pastille--non' : ''}">${v === 'present' ? 'Présent' : v === 'absent' ? 'Absent' : 'Non pointé'}</span></li>`; }).join('')}</ul>` : '<p class="doux">Aucune séance passée.</p>'}
-        </div>
-        <div class="bloc-tiroir"><h3>Paiements</h3>
-          ${pay.length ? `<ul class="liste">${pay.map((p) => `<li><span>${esc(p.label)}<br><small class="doux">${dateC(p.date)}, ${esc(p.method)}</small></span>
-            <span class="outils">${euro(p.amount)} <span class="pastille ${p.status === 'payé' ? 'pastille--ok' : p.status === 'à régler' ? 'pastille--non' : ''}">${esc(p.status)}</span>
-            ${p.status === 'à régler' ? `<button class="btn btn--mini" type="button" data-encaisser="${p.id}">Encaisser</button>` : ''}</span></li>`).join('')}</ul>` : '<p class="doux">Aucun paiement.</p>'}
-        </div>
-        <div class="bloc-tiroir"><h3>Données personnelles (RGPD)</h3>
-          <div class="actions"><button class="btn btn--clair btn--mini" type="button" data-export>Exporter ses données</button>
-          <button class="btn btn--danger btn--mini" type="button" data-effacer>Effacer ses données</button></div>
-          <p class="petit doux">L’effacement anonymise la fiche et annule les réservations à venir. Les paiements restent conservés pour la comptabilité.</p>
-        </div>` : ''}`;
+      </div>`;
 
-      $('[data-f="client"]', root).addEventListener('submit', (e) => {
-        e.preventDefault();
-        const r = S.upsertClient({ id: c ? c.id : undefined, firstName: $('#k-prenom', root).value.trim(), lastName: $('#k-nom', root).value.trim(),
-          email: $('#k-email', root).value, phone: $('#k-tel', root).value.trim(), notes: $('#k-notes', root).value, marketing: $('#k-mkt', root).checked });
-        if (!r.ok) { $('[data-err]', root).textContent = r.msg; return; }
-        toast(c ? 'Fiche enregistrée.' : 'Fiche créée.');
-        if (!c) { id = r.client.id; tiroirRefresh(); }
-      });
-      if (!c) return;
-      $$('[data-credit]', root).forEach((b) => b.addEventListener('click', () => S.adjustCredits(b.dataset.credit, Number(b.dataset.d))));
-      $$('[data-resilier]', root).forEach((b) => b.addEventListener('click', () => {
-        const m = S.byId('memberships', b.dataset.resilier);
-        const eng = m.engagementEnd && new Date(m.engagementEnd) > new Date();
-        if (!confirm((eng ? 'Attention : engagement en cours jusqu’au ' + dateC(m.engagementEnd) + '. Résiliation anticipée uniquement sur justificatif.\n\n' : '') + 'Résilier « ' + m.name + ' » ? Plus aucun prélèvement ne sera effectué.')) return;
-        S.stopMembership(m.id); toast('Formule résiliée.');
-      }));
-      $('[data-vendre]', root).addEventListener('click', () => {
-        const off = S.offer($('[data-vente-offre]', root).value);
-        if (off.newOnly && !S.isNewClient(c.id) && !confirm('Cette offre est réservée aux nouveaux clients. Vendre quand même ?')) return;
-        S.sell(c.id, off.id, $('[data-vente-moyen]', root).value, $('[data-vente-paye]', root).checked);
-        toast('Vente enregistrée : ' + off.name + '.');
-      });
-      $$('[data-seance]', root).forEach((b) => b.addEventListener('click', () => ficheSeance(b.dataset.seance)));
-      $$('[data-encaisser]', root).forEach((b) => b.addEventListener('click', () => { S.setPayment(b.dataset.encaisser, 'payé', 'Au studio'); toast('Paiement encaissé.'); }));
-      $('[data-export]', root).addEventListener('click', () => telecharger('donnees-' + c.lastName.toLowerCase() + '.json', JSON.stringify(S.exportClient(c.id), null, 2), 'application/json'));
-      $('[data-effacer]', root).addEventListener('click', () => {
-        if (!confirm('Effacer définitivement les données personnelles de ' + nom(c) + ' ? Cette action est irréversible.')) return;
-        S.eraseClient(c.id); fermerTiroir(); toast('Données effacées.');
-      });
+    activerPlis(vue, contenus);
+    $$('[data-ancre]', vue).forEach((b) => b.addEventListener('click', () => {
+      const d = $('#sec-' + b.dataset.ancre, vue);
+      if (!d.open) d.open = true;
+      d.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+      const f = $('summary', d); if (f) f.focus({ preventScroll: true });
+    }));
+    lierFormulaireClient(c);
+    $$('[data-credit]', vue).forEach((b) => b.addEventListener('click', () => S.adjustCredits(b.dataset.credit, Number(b.dataset.d))));
+    $$('[data-resilier]', vue).forEach((b) => b.addEventListener('click', () => {
+      const m = S.byId('memberships', b.dataset.resilier);
+      const eng = m.engagementEnd && new Date(m.engagementEnd) > new Date();
+      if (!confirm((eng ? 'Attention : engagement en cours jusqu’au ' + dateC(m.engagementEnd) + '. Résiliation anticipée uniquement sur justificatif.\n\n' : '') + 'Résilier « ' + m.name + ' » ? Plus aucun prélèvement ne sera effectué.')) return;
+      S.stopMembership(m.id); toast('Formule résiliée.');
+    }));
+    $('[data-vendre]', vue).addEventListener('click', () => {
+      const off = S.offer($('[data-vente-offre]', vue).value);
+      if (off.newOnly && !S.isNewClient(c.id) && !confirm('Cette offre est réservée aux nouveaux clients. Vendre quand même ?')) return;
+      S.sell(c.id, off.id, $('[data-vente-moyen]', vue).value, $('[data-vente-paye]', vue).checked);
+      toast('Vente enregistrée : ' + off.name + '.');
+    });
+    $$('[data-seance]', vue).forEach((b) => b.addEventListener('click', () => ficheSeance(b.dataset.seance)));
+    $$('[data-encaisser]', vue).forEach((b) => b.addEventListener('click', () => { S.setPayment(b.dataset.encaisser, 'payé', 'Au studio'); toast('Paiement encaissé.'); }));
+    $('[data-export]', vue).addEventListener('click', () => telecharger('donnees-' + c.lastName.toLowerCase() + '.json', JSON.stringify(S.exportClient(c.id), null, 2), 'application/json'));
+    $('[data-effacer]', vue).addEventListener('click', () => {
+      if (!confirm('Effacer définitivement les données personnelles de ' + nom(c) + ' ? Cette action est irréversible.')) return;
+      S.eraseClient(c.id); toast('Données effacées.'); location.hash = '#clients';
+    });
+  }
+
+  function lierFormulaireClient(c) {
+    $('[data-f="client"]', vue).addEventListener('submit', (e) => {
+      e.preventDefault();
+      const r = S.upsertClient({ id: c ? c.id : undefined, firstName: $('#k-prenom', vue).value.trim(), lastName: $('#k-nom', vue).value.trim(),
+        email: $('#k-email', vue).value, phone: $('#k-tel', vue).value.trim(), notes: $('#k-notes', vue).value, marketing: $('#k-mkt', vue).checked });
+      if (!r.ok) { $('[data-err]', vue).textContent = r.msg; return; }
+      toast(c ? 'Fiche enregistrée.' : 'Fiche créée.');
+      if (!c) location.hash = '#client/' + r.client.id;
     });
   }
 
@@ -460,43 +551,102 @@
   function coachs() {
     const now = new Date();
     vue.innerHTML = `<div class="tete"><div><h1>Coachs</h1><p>Présentations affichées sur la page « Le studio ».</p></div><button class="btn" type="button" data-nouveau>Ajouter un coach</button></div>
-      <div class="table-wrap"><table><thead><tr><th>Coach</th><th class="num">Cours sur 30 jours</th><th>Présentation</th><th>Actif</th><th></th></tr></thead><tbody>
-      ${S.db.coaches.map((c) => `<tr><td><strong style="font-weight:500">${esc(c.name)}</strong></td>
+      <div class="table-wrap"><table><thead><tr><th>Photo</th><th>Coach</th><th class="num">Cours sur 30 jours</th><th>Présentation</th><th>Actif</th><th></th></tr></thead><tbody>
+      ${S.db.coaches.map((c) => `<tr><td>${c.photo ? `<img class="vignette-coach" src="${esc(S.photoSrc(c.photo, '../'))}" alt="" loading="lazy">` : '<span class="pastille">Sans photo</span>'}</td><td><strong style="font-weight:500">${esc(c.name)}</strong></td>
         <td class="num">${S.sessionsBetween(now, new Date(now.getTime() + 30 * S.DAY)).filter((s) => s.coachId === c.id).length}</td>
         <td>${c.bio ? '<span class="pastille pastille--ok">Rédigée</span>' : '<span class="pastille">À rédiger</span>'}</td>
         <td>${c.active ? 'Oui' : 'Non'}</td><td><button class="btn btn--clair btn--mini" type="button" data-coach="${c.id}">Modifier</button></td></tr>`).join('')}</tbody></table></div>`;
     $$('[data-coach]', vue).forEach((b) => b.addEventListener('click', () => ficheCoach(b.dataset.coach)));
     $('[data-nouveau]', vue).addEventListener('click', () => ficheCoach(null));
   }
+  /* Photo de coach : choisie sur l'ordinateur ou le téléphone, allégée ici, jamais recadrée. */
+  const PHOTO_MAX = 1000; // plus grand côté, en pixels : net sur écran haute densité, léger à charger
+  function lireImage(fichier) {
+    return new Promise((ok, ko) => {
+      const url = URL.createObjectURL(fichier);
+      const img = new Image();
+      img.onload = () => { URL.revokeObjectURL(url); ok(img); };
+      img.onerror = () => { URL.revokeObjectURL(url); ko(new Error('illisible')); };
+      img.src = url;
+    });
+  }
+  async function preparerPhoto(fichier) {
+    if (!/^image\/(jpeg|png|webp)$/.test(fichier.type)) throw new Error('Ce fichier n’est pas une photo prise en charge. Choisissez une image JPG, PNG ou WebP.');
+    if (fichier.size > 20e6) throw new Error('Cette photo dépasse 20 Mo. Choisissez une version plus légère.');
+    let img;
+    try { img = await lireImage(fichier); } catch (e) { throw new Error('Impossible de lire cette photo. Essayez une autre image.'); }
+    const w0 = img.naturalWidth; const h0 = img.naturalHeight;
+    const k = Math.min(1, PHOTO_MAX / Math.max(w0, h0));
+    const w = Math.round(w0 * k); const h = Math.round(h0 * k);
+    const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+    const cx = cv.getContext('2d'); cx.imageSmoothingQuality = 'high'; cx.drawImage(img, 0, 0, w, h);
+    let data = cv.toDataURL('image/webp', 0.84);
+    if (!data.startsWith('data:image/webp')) data = cv.toDataURL('image/jpeg', 0.86);
+    const alertes = [];
+    if (w0 < 500) alertes.push('Photo de petite taille (' + w0 + ' px de large) : elle risque d’être floue. Une photo d’au moins 800 px de large est conseillée.');
+    if (w0 > h0) alertes.push('Photo horizontale : elle s’affichera entière, mais une photo verticale met mieux le coach en valeur.');
+    return { data, w, h, alertes };
+  }
+
   function ficheCoach(id) {
+    let photo = null; // null : inchangée ; '' : retirée ; sinon nouvelle image
+    let infos = [];
     tiroir((root) => {
       const c = id && S.coach(id);
+      const actuelle = photo !== null ? photo : (c ? c.photo : '');
       root.innerHTML = `<h2 id="tiroir-titre">${c ? esc(c.name) : 'Nouveau coach'}</h2>
         <form data-f="coach" class="bloc-tiroir">
           <div class="champ"><label for="co-nom">Prénom</label><input id="co-nom" value="${esc(c ? c.name : '')}" required></div>
-          <div class="champ"><label for="co-photo">Photo (nom du fichier)</label><input id="co-photo" value="${esc(c ? c.photo : '')}" placeholder="coach-prenom.webp"></div>
+          <div class="champ"><span class="champ__titre">Photo</span>
+            <div class="photo-coach" data-depot>
+              <div class="photo-coach__apercu">${actuelle ? `<img src="${esc(S.photoSrc(actuelle, '../'))}" alt="Aperçu de la photo telle qu’affichée sur le site">` : '<span>Aucune photo</span>'}</div>
+              <div class="photo-coach__actions">
+                <label class="btn btn--clair btn--mini" for="co-fichier">${actuelle ? 'Changer la photo' : 'Choisir une photo'}</label>
+                <input id="co-fichier" class="sr" type="file" accept="image/jpeg,image/png,image/webp">
+                ${actuelle ? '<button class="btn btn--danger btn--mini" type="button" data-retirer-photo>Retirer la photo</button>' : ''}
+                <p class="petit doux">Cliquez ou glissez une photo ici (JPG, PNG ou WebP). Elle est affichée entière, sans recadrage, et allégée automatiquement. Elle apparaît sur le site dès que vous enregistrez.</p>
+                ${photo ? '<p class="petit" data-photo-etat><span class="pastille pastille--ok">Nouvelle photo prête</span> Pensez à enregistrer.</p>' : ''}
+                ${infos.map((t) => `<p class="petit avertissement">${esc(t)}</p>`).join('')}
+              </div>
+            </div>
+          </div>
           <div class="champ"><label for="co-bio">Présentation (un paragraphe par ligne)</label><textarea id="co-bio" rows="10">${esc(c ? c.bio : '')}</textarea></div>
           <label class="case"><input type="checkbox" id="co-actif" ${!c || c.active ? 'checked' : ''}> Affiché sur le site et disponible au planning</label>
           <p class="erreur" data-err></p>
           <button class="btn" type="submit">Enregistrer</button>
         </form>`;
+      // Garde la saisie en cours quand l'aperçu se met à jour.
+      const garder = () => ({ nom: $('#co-nom', root).value, bio: $('#co-bio', root).value, actif: $('#co-actif', root).checked });
+      const remettre = (v) => { $('#co-nom', root).value = v.nom; $('#co-bio', root).value = v.bio; $('#co-actif', root).checked = v.actif; };
+      async function prendre(fichier) {
+        if (!fichier) return;
+        const v = garder();
+        try { const r = await preparerPhoto(fichier); photo = r.data; infos = r.alertes; }
+        catch (e) { infos = []; tiroirRefresh(); remettre(v); $('[data-err]', root).textContent = e.message; return; }
+        tiroirRefresh(); remettre(v);
+      }
+      $('#co-fichier', root).addEventListener('change', (e) => prendre(e.target.files[0]));
+      const depot = $('[data-depot]', root);
+      ['dragenter', 'dragover'].forEach((t) => depot.addEventListener(t, (e) => { e.preventDefault(); depot.classList.add('survol'); }));
+      ['dragleave', 'drop'].forEach((t) => depot.addEventListener(t, () => depot.classList.remove('survol')));
+      depot.addEventListener('drop', (e) => { e.preventDefault(); prendre(e.dataTransfer.files[0]); });
+      const ret = $('[data-retirer-photo]', root);
+      if (ret) ret.addEventListener('click', () => { const v = garder(); photo = ''; infos = []; tiroirRefresh(); remettre(v); });
       $('[data-f="coach"]', root).addEventListener('submit', (e) => {
         e.preventDefault();
         const n = $('#co-nom', root).value.trim();
         if (!n) { $('[data-err]', root).textContent = 'Indiquez le prénom du coach.'; return; }
-        S.upsertCoach({ id: c ? c.id : undefined, name: n, photo: $('#co-photo', root).value.trim(), bio: $('#co-bio', root).value, active: $('#co-actif', root).checked });
+        const avant = c ? c.photo : '';
+        const enr = S.upsertCoach({ id: c ? c.id : undefined, name: n, photo: photo !== null ? photo : avant, bio: $('#co-bio', root).value, active: $('#co-actif', root).checked });
+        if (!S.saveOk) {
+          S.upsertCoach({ id: enr.id, photo: avant }); // revient à l'ancienne photo
+          id = enr.id;
+          $('[data-err]', root).textContent = 'Enregistrement impossible : l’espace de stockage de ce navigateur est plein. Essayez une photo plus légère.';
+          return;
+        }
         fermerTiroir(); toast('Coach enregistré. Le site est à jour.');
       });
     });
-  }
-
-  /* ---------- vue : e-mails ---------- */
-  function notifications() {
-    const list = S.db.notifications.slice(0, 80);
-    vue.innerHTML = `<div class="tete"><div><h1>E-mails envoyés</h1><p>Confirmations, annulations, listes d’attente et changements d’horaire, déclenchés automatiquement.</p></div></div>
-      <p class="petit doux">Démo : les e-mails sont enregistrés ici sans être envoyés. En production, ils partent via un service d’envoi (Brevo ou SMTP de l’hébergeur), avec un rappel la veille du cours.</p>
-      ${list.length ? list.map((n) => `<div class="mail"><div class="outils" style="justify-content:space-between"><strong style="font-weight:500">${esc(n.subject)}</strong><small class="doux">${new Date(n.at).toLocaleString('fr-FR')}</small></div>
-        <small class="doux">À : ${esc(n.to)}</small><p>${esc(n.body)}</p></div>`).join('') : '<p class="vide">Aucun e-mail pour le moment. Faites une réservation sur le site pour voir la confirmation apparaître ici.</p>'}`;
   }
 
   /* ---------- vue : réglages ---------- */

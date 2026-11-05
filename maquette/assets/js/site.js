@@ -286,7 +286,7 @@
     $$('[data-coachs]').forEach((root) => {
       const fiche = root.hasAttribute('data-fiche');
       root.innerHTML = S.db.coaches.filter((c) => c.active).map((c) => {
-        const img = `<div class="arche"><img src="assets/img/${esc(c.photo)}" alt="" width="600" height="800" loading="lazy" onerror="this.remove()"></div>`;
+        const img = `<div class="arche"><img src="${esc(S.photoSrc(c.photo))}" alt="" width="600" height="800" loading="lazy" decoding="async" onerror="this.remove()"></div>`;
         return `<div class="coach">${fiche ? `<button type="button" data-coach="${c.id}">${img}<h3>${esc(c.name)}</h3></button>`
           : `<a href="studio.html#coachs" style="text-decoration:none">${img}<h3>${esc(c.name)}</h3></a>`}</div>`;
       }).join('');
@@ -301,6 +301,35 @@
       ${next.length ? `<p><strong>Prochains cours</strong></p><ul class="liste-resa">${next.map((s) => `<li><span>${jourLong(s.start)}, ${hhmm(s.start)}<br><small class="doux">${esc(S.activity(s.activityId).name)}</small></span><button class="btn btn--clair" type="button" data-r="${s.id}">${S.placesLeft(s) ? 'Réserver' : 'Liste d’attente'}</button></li>`).join('')}</ul>` : ''}
       <div class="actions"><a class="btn" href="planning.html?coach=${c.id}">Tous ses cours</a></div>`);
     $$('[data-r]', dlg).forEach((b) => b.addEventListener('click', () => ouvrirReservation(b.dataset.r)));
+  }
+
+  /* ---------- historique replié par année et par mois ---------- */
+  // État ouvert / fermé gardé entre deux affichages ; seul le contenu des mois ouverts est construit.
+  const etatPeriodes = new Map();
+  function periodes(prefixe, groupes, ligne, resume) {
+    const contenus = {};
+    const html = groupes.map((a, ia) => {
+      const ca = prefixe + ':' + a.annee;
+      const oa = etatPeriodes.has(ca) ? etatPeriodes.get(ca) : ia === 0;
+      return `<details class="periode periode--annee" data-cle="${ca}" ${oa ? 'open' : ''}>
+        <summary><span class="periode__titre">${a.annee}</span><small>${resume(a.items)}</small></summary>
+        ${a.mois.map((m, im) => {
+          const cm = prefixe + ':' + m.cle;
+          const om = etatPeriodes.has(cm) ? etatPeriodes.get(cm) : ia === 0 && im === 0;
+          contenus[cm] = () => `<ul class="liste-resa">${m.items.map(ligne).join('')}</ul>`;
+          return `<details class="periode periode--mois" data-cle="${cm}" ${om ? 'open' : ''}>
+            <summary><span class="periode__titre">${m.label}</span><small>${resume(m.items)}</small></summary>
+            <div data-contenu>${om ? contenus[cm]() : ''}</div></details>`;
+        }).join('')}</details>`;
+    }).join('');
+    return { html: `<div class="periodes">${html}</div>`, contenus };
+  }
+  function activerPeriodes(root, contenus) {
+    $$('details[data-cle]', root).forEach((d) => d.addEventListener('toggle', () => {
+      etatPeriodes.set(d.dataset.cle, d.open);
+      const c = d.querySelector(':scope > [data-contenu]');
+      if (d.open && c && !c.firstChild && contenus[d.dataset.cle]) c.innerHTML = contenus[d.dataset.cle]();
+    }));
   }
 
   /* ---------- espace client ---------- */
@@ -329,7 +358,16 @@
     const now = new Date();
     const all = S.bookingsOf(me.id);
     const futur = all.filter((s) => new Date(s.start) > now && !s.cancelled);
-    const passe = all.filter((s) => new Date(s.start) <= now && s.bookings.some((b) => b.clientId === me.id)).reverse().slice(0, 12);
+    const passeTout = all.filter((s) => new Date(s.start) <= now && s.bookings.some((b) => b.clientId === me.id));
+    const passe = passeTout.slice(-12);
+    const histo = periodes('compte-' + me.id, S.parPeriode(passeTout, (s) => s.start), (s) => {
+      const st = s.attendance[me.id];
+      return `<li><span>${esc(S.activity(s.activityId).name)}<br><small class="doux">${jourLong(s.start)}, <span class="horaire">${hhmm(s.start)}</span></small></span>
+        <span class="statut ${st === 'present' ? 'statut--ok' : st === 'absent' ? 'statut--non' : ''}">${st === 'present' ? 'Présent·e' : st === 'absent' ? 'Absent·e' : 'Non pointé'}</span></li>`;
+    }, (list) => {
+      const p = list.filter((s) => s.attendance[me.id] === 'present').length;
+      return list.length + ' séance' + (list.length > 1 ? 's' : '') + (p ? ', ' + p + ' présence' + (p > 1 ? 's' : '') : '');
+    });
     const forfaits = S.activeMemberships(me.id);
     const pay = S.db.payments.filter((p) => p.clientId === me.id).sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 8);
     const presents = passe.filter((s) => s.attendance[me.id] === 'present').length;
@@ -355,16 +393,12 @@
         ${futur.length ? `<ul class="liste-resa">${futur.map((s) => {
           const w = s.waitlist.findIndex((x) => x.clientId === me.id);
           const late = (new Date(s.start) - now) < S.db.settings.freeCancelHours * 36e5;
-          return `<li><span><strong style="font-weight:500">${esc(S.activity(s.activityId).name)}</strong><br>${jourLong(s.start)}, ${hhmm(s.start)}, avec ${esc((S.coach(s.coachId) || {}).name || 'l’équipe')}</span>
+          return `<li><span><strong style="font-weight:500">${esc(S.activity(s.activityId).name)}</strong><br>${jourLong(s.start)}, <span class="horaire">${hhmm(s.start)}</span>, avec ${esc((S.coach(s.coachId) || {}).name || 'l’équipe')}</span>
             <span>${w > -1 ? `<span class="statut">Liste d’attente, position ${w + 1}</span>` : '<span class="statut statut--ok">Confirmé</span>'}
             <button class="btn btn--clair" type="button" style="min-height:2.4rem;padding:.3rem 1rem;margin-left:.5rem" data-annuler="${s.id}" data-late="${late && w < 0 ? 1 : 0}">${w > -1 ? 'Quitter la liste' : 'Annuler'}</button></span></li>`;
         }).join('')}</ul>` : `<p class="vide">Aucune séance prévue. <a class="lien" href="planning.html">Réserver une séance</a></p>`}
-        <h2>Historique</h2>
-        ${passe.length ? `<ul class="liste-resa">${passe.map((s) => {
-          const st = s.attendance[me.id];
-          return `<li><span>${esc(S.activity(s.activityId).name)}<br><small class="doux">${jourLong(s.start)}, ${hhmm(s.start)}</small></span>
-            <span class="statut ${st === 'present' ? 'statut--ok' : st === 'absent' ? 'statut--non' : ''}">${st === 'present' ? 'Présent·e' : st === 'absent' ? 'Absent·e' : 'Non pointé'}</span></li>`;
-        }).join('')}</ul>` : '<p class="vide">Votre historique apparaîtra après votre première séance.</p>'}
+        <h2>Historique <small class="h-compte">${passeTout.length} séance${passeTout.length > 1 ? 's' : ''}</small></h2>
+        ${passeTout.length ? histo.html : '<p class="vide">Votre historique apparaîtra après votre première séance.</p>'}
         <h2>Mes paiements</h2>
         ${pay.length ? `<ul class="liste-resa">${pay.map((p) => `<li><span>${esc(p.label)}<br><small class="doux">${new Date(p.date).toLocaleDateString('fr-FR')}, ${esc(p.method)}</small></span><span>${euro(p.amount)} <span class="statut ${p.status === 'payé' ? 'statut--ok' : p.status === 'à régler' ? 'statut--non' : ''}">${esc(p.status)}</span></span></li>`).join('')}</ul>` : '<p class="vide">Aucun paiement.</p>'}
         <h2>Mes données</h2>
@@ -376,6 +410,7 @@
         </div>
       </div></div>`;
 
+    activerPeriodes(root, histo.contenus);
     $$('[data-annuler]', root).forEach((b) => b.addEventListener('click', () => {
       const s = S.byId('sessions', b.dataset.annuler);
       const late = b.dataset.late === '1';
