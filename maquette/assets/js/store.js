@@ -11,6 +11,8 @@
 
   const uid = (p) => p + Math.random().toString(36).slice(2, 9);
   const clone = (o) => JSON.parse(JSON.stringify(o));
+  // Retire les champs « undefined » : sinon Object.assign écrase les valeurs par défaut (dont l'identifiant).
+  const defined = (o) => Object.fromEntries(Object.entries(o || {}).filter(([, v]) => v !== undefined));
   const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
   const addMonths = (d, n) => { const x = new Date(d); x.setMonth(x.getMonth() + n); return x; };
 
@@ -145,11 +147,20 @@
   function load() {
     try { db = JSON.parse(localStorage.getItem(KEY)); } catch (e) { db = null; }
     if (!db || db.version !== 1) { db = seed(); persist(); }
+    repairIds();
     renewSubscriptions();
     return db;
   }
   function persist() {
     try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { /* navigation privée : données en mémoire */ }
+  }
+  // Réparation : séances, clients ou coachs enregistrés sans identifiant par l'ancienne version.
+  function repairIds() {
+    let fixed = 0;
+    [['sessions', 's'], ['clients', 'u'], ['coaches', 'c']].forEach(([col, p]) => {
+      (db[col] || []).forEach((x) => { if (!x.id) { x.id = uid(p); fixed++; } });
+    });
+    if (fixed) persist();
   }
   function commit(text) {
     if (text) db.log.unshift({ at: new Date().toISOString(), text });
@@ -358,6 +369,7 @@
     signOut() { try { localStorage.removeItem(ME_KEY); } catch (e) {} },
 
     upsertClient(data) {
+      data = defined(data);
       const email = String(data.email || '').trim().toLowerCase();
       if (!data.firstName || !data.lastName || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return { ok: false, msg: 'Renseignez prénom, nom et une adresse e-mail valide.' };
       const dup = db.clients.find((c) => c.email === email && c.id !== data.id);
@@ -392,6 +404,7 @@
     },
 
     upsertSession(data) {
+      data = defined(data);
       let s = data.id && byId('sessions', data.id);
       if (s) {
         const changedTime = s.start !== data.start;
@@ -456,6 +469,7 @@
     },
     updateOffer(id, patch) { Object.assign(byId('offers', id), patch); commit('Tarif modifié'); },
     upsertCoach(data) {
+      data = defined(data);
       let c = data.id && byId('coaches', data.id);
       if (c) Object.assign(c, data); else { c = Object.assign({ id: uid('c'), active: true, photo: '', bio: '' }, data); db.coaches.push(c); }
       commit('Coach enregistré : ' + c.name);

@@ -169,7 +169,7 @@
 
   function ouvrirReservation(id) {
     const s = S.byId('sessions', id);
-    if (!s) return;
+    if (!s) { toast('Cette séance n’est plus disponible. Le planning a été actualisé.'); renderAll(); return; }
     const me = S.me();
     if (me) return etapeChoix(s, me);
     fenetre(`<h2 id="fen-titre">Réserver</h2>${recap(s)}

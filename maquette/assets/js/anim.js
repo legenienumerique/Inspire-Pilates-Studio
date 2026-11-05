@@ -36,9 +36,8 @@
     if (entree && ordi) {
       gsap.timeline({ scrollTrigger: { trigger: entree, start: 'top top', end: '+=120%', pin: true, scrub: 1, anticipatePin: 1 } })
         .fromTo('.entree__fenetre',
-          { clipPath: 'inset(10% 37% 0% 37% round 13vw 13vw 0vw 0vw)' },
-          { clipPath: 'inset(0% 0% 0% 0% round 0vw 0vw 0vw 0vw)', ease: 'power1.inOut', duration: 1 })
-        .fromTo('.entree__fenetre img', { scale: 1.25 }, { scale: 1, ease: 'power1.inOut', duration: 1 }, 0)
+          { clipPath: 'inset(10% 37% 0% 37% round 999px 999px 0px 0px)' },
+          { clipPath: 'inset(0% 0% 0% 0% round 0px 0px 0px 0px)', ease: 'power1.inOut', duration: 1 })
         .to('.entree__voile', { opacity: 1, duration: 0.4 }, 0.6)
         .fromTo('.entree__texte', { opacity: 0, y: 30 }, { opacity: 1, y: 0, duration: 0.4 }, 0.7)
         .to({}, { duration: 0.25 });
@@ -81,15 +80,7 @@
       });
     });
 
-    /* ---------- photos en arche : la photo glisse plus lentement que son cadre ---------- */
-    if (ordi) {
-      $$('.cours .arche img, .deux-col .arche:not(.arche--halo) img, .deux-col .arche__vitre img, .contact .arche img, .galerie img').forEach((img) => {
-        gsap.fromTo(img, { yPercent: -7, scale: 1.16 }, {
-          yPercent: 7, scale: 1.16, ease: 'none',
-          scrollTrigger: { trigger: img.parentElement, start: 'top bottom', end: 'bottom top', scrub: true }
-        });
-      });
-    }
+    /* Photos affichees telles quelles : plus de zoom permanent (x1,16) ni de parallaxe, qui agrandissaient et floutaient les images. */
 
     /* ---------- formules et abonnements : les arches montent l'une après l'autre ---------- */
     ['.parcours', '.grille-abos'].forEach((sel) => {
